@@ -1,0 +1,25 @@
+configuration:
+  heartbeat_interval:
+    name: Heartbeat interval (seconds)
+    description: How often, in seconds, to run the connectivity checks.
+  check_gateway:
+    name: Check default gateway
+    description: >-
+      Discover the host's default gateway and ping it each interval. Requires
+      host networking (enabled) to see the real LAN gateway.
+  ping_targets:
+    name: Public ping targets
+    description: >-
+      Hosts to ping each interval (typically public DNS resolvers). Each entry
+      has a friendly name and an IP/host.
+  broker_dns_target:
+    name: Broker DNS target
+    description: >-
+      Hostname to resolve as a DNS health check. Leave empty to use the MQTT
+      broker host below.
+  log_level:
+    name: Log level
+    description: Verbosity of the add-on log output.
+  mqtt:
+    name: MQTT broker
+    description: Where heartbeat results are published.

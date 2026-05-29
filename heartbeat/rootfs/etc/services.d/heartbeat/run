@@ -1,0 +1,17 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Start the heartbeat service
+#
+# Thin shim: the Python app reads /data/options.json (under Home Assistant) and
+# HEARTBEAT_* env vars (standalone) on its own — there is nothing to translate
+# here, and it logs its own warning if no MQTT broker is configured. We avoid
+# touching the Supervisor API so this run script is silent when the image is run
+# as a plain container outside Home Assistant.
+#
+# `exec` makes python the service PID so s6's SIGTERM reaches it directly for a
+# clean shutdown. s6-overlay docs: https://github.com/just-containers/s6-overlay
+# ==============================================================================
+
+bashio::log.info "Starting heartbeat..."
+
+exec /opt/heartbeat/.venv/bin/python -m heartbeat

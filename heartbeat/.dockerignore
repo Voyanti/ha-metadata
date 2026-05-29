@@ -1,0 +1,7 @@
+# Never copy a host-built (wrong-arch) virtualenv or caches into the image.
+app/.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+app/.pytest_cache
+app/.ruff_cache

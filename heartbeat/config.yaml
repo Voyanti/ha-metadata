@@ -1,0 +1,46 @@
+# https://developers.home-assistant.io/docs/apps/configuration#app-configuration
+name: Heartbeat
+version: "1.0.0"
+slug: heartbeat
+description: Network heartbeat checker (gateway/DNS/MQTT) with SQLite store-and-forward
+url: "https://github.com/Voyanti/ha-metadata/tree/main/heartbeat"
+arch:
+  - aarch64
+  - amd64
+init: false
+host_network: true        # so the gateway check sees the real LAN default route
+privileged:
+  - NET_RAW               # raw ICMP sockets for ping
+image: "ghcr.io/voyanti/heartbeat"
+options:
+  heartbeat_interval: 60
+  check_gateway: true
+  ping_targets:
+    - name: cloudflare
+      host: 1.1.1.1
+    - name: google
+      host: 8.8.8.8
+  broker_dns_target: ""
+  log_level: info
+  mqtt:
+    host: ""
+    port: 1883
+    username: ""
+    password: ""
+    topic_prefix: heartbeat
+    tls: false
+schema:
+  heartbeat_interval: int(5,)
+  check_gateway: bool
+  ping_targets:
+    - name: str
+      host: str
+  broker_dns_target: str?
+  log_level: list(debug|info|warning|error)
+  mqtt:
+    host: str?
+    port: port
+    username: str?
+    password: password?
+    topic_prefix: str
+    tls: bool
