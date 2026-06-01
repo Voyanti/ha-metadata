@@ -126,6 +126,18 @@ def test_mqtt_tls_certs_default_none_and_env_override():
     assert cfg.mqtt.ca_cert is None  # empty string -> None
 
 
+def test_mqtt_client_id_default_empty():
+    assert load_config(environ=NO_FILE).mqtt.client_id == ""
+
+
+def test_mqtt_client_id_from_options_and_env(tmp_path):
+    f = tmp_path / "options.json"
+    f.write_text(json.dumps({"mqtt": {"client_id": "thing-A"}}))
+    assert load_config(environ={"HEARTBEAT_OPTIONS_FILE": str(f)}).mqtt.client_id == "thing-A"
+    cfg = load_config(environ={**NO_FILE, "HEARTBEAT_MQTT_CLIENT_ID": "thing-B"})
+    assert cfg.mqtt.client_id == "thing-B"
+
+
 def test_effective_broker_dns_target():
     cfg = load_config(environ={**NO_FILE, "HEARTBEAT_MQTT_HOST": "mybroker"})
     assert cfg.effective_broker_dns_target == "mybroker"

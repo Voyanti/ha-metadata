@@ -40,7 +40,7 @@ class MqttConfig:
     topic_prefix: str = "heartbeat"
     qos: int = 1
     retain: bool = False
-    client_id: str = "heartbeat"
+    client_id: str = ""  # empty -> no topic namespace + broker auto-generates the connection id
     # Mutual TLS (e.g. AWS IoT Core): paths to PEM files.
     ca_cert: str | None = None
     client_cert: str | None = None

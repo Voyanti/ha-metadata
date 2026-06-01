@@ -1,3 +1,10 @@
+## 1.2.0
+
+- Add `mqtt.client_id` option. When set, published topics are namespaced with it
+  (`<client_id>/<topic_prefix>/<type>/<name>`) so multiple instances can share a
+  broker and work with brokers that restrict publishing to client-id-prefixed
+  topics. Default empty (topics and connection id unchanged).
+
 ## 1.1.0
 
 - Support mutual-TLS MQTT brokers (e.g. AWS IoT Core): `mqtt.ca_cert`,

@@ -10,4 +10,4 @@ when run as a Home Assistant add-on. The same image therefore runs unchanged as
 a plain Docker container on a Linux host.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"

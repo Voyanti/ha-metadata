@@ -76,10 +76,17 @@ class MqttPublisher:
         except (OSError, ValueError) as exc:
             _LOGGER.warning("MQTT connect_async failed: %s", exc)
 
+    def _topic(self, target_type: str, target_name: str) -> str:
+        # When client_id is set, namespace the topic with it so multiple
+        # instances can share a broker, and to satisfy brokers that only permit
+        # publishing to client-id-prefixed topics: <client_id>/<prefix>/...
+        base = f"{self.cfg.topic_prefix}/{target_type}/{target_name}"
+        return f"{self.cfg.client_id}/{base}" if self.cfg.client_id else base
+
     def publish_result(self, payload_json: str, target_type: str, target_name: str) -> bool:
         if not self.connected:
             return False
-        topic = f"{self.cfg.topic_prefix}/{target_type}/{target_name}"
+        topic = self._topic(target_type, target_name)
         try:
             info = self._client.publish(
                 topic, payload_json, qos=self.cfg.qos, retain=self.cfg.retain

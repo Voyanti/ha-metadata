@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/apps/configuration#app-configuration
 name: Heartbeat
-version: "1.1.0"
+version: "1.2.0"
 slug: heartbeat
 description: Network heartbeat checker (gateway/DNS/MQTT) with SQLite store-and-forward
 url: "https://github.com/Voyanti/ha-metadata/tree/main/heartbeat"
@@ -30,6 +30,7 @@ options:
     username: ""
     password: ""
     topic_prefix: heartbeat
+    client_id: ""
     tls: false
     ca_cert: ""
     client_cert: ""
@@ -49,6 +50,7 @@ schema:
     username: str?
     password: password?
     topic_prefix: str
+    client_id: str?
     tls: bool
     ca_cert: str?
     client_cert: str?

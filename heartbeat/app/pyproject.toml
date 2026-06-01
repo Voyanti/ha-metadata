@@ -1,6 +1,6 @@
 [project]
 name = "heartbeat"
-version = "1.1.0"
+version = "1.2.0"
 description = "Modular network heartbeat checker with SQLite store-and-forward and MQTT publishing"
 readme = "README.md"
 requires-python = ">=3.14"

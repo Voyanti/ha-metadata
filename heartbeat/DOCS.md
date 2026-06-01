@@ -12,6 +12,10 @@ On each `heartbeat_interval` the app runs three checks:
 | Public DNS ping | `ping -c 2 -W 2 <host>` for each configured target | `<prefix>/public_dns/<name>` |
 | Broker DNS resolution | `getent hosts <host> \|\| nslookup <host>` and parses the resolved IPs | `<prefix>/mqtt_broker/mqtt_broker_endpoint` |
 
+If `mqtt.client_id` is set, every topic is additionally namespaced with it —
+`<client_id>/<prefix>/<type>/<name>` (e.g. `thing-1/heartbeat/gateway/default_gateway`).
+Leave it empty to keep the topics above unchanged.
+
 Each result is a JSON document:
 
 ```json
@@ -50,6 +54,7 @@ mqtt:
   username: ""
   password: ""
   topic_prefix: heartbeat
+  client_id: ""              # set to namespace topics: <client_id>/<prefix>/...
   tls: false
 ```
 
@@ -64,6 +69,7 @@ mqtt:
 | `mqtt.port` | Broker port (default 1883, or 8883 for TLS). |
 | `mqtt.username` / `mqtt.password` | Optional broker credentials. |
 | `mqtt.topic_prefix` | Topic prefix; results go to `<prefix>/<type>/<name>`. |
+| `mqtt.client_id` | MQTT client identifier. If set, topics are namespaced as `<client_id>/<prefix>/...`. Empty → broker auto-generates the connection id and topics are not namespaced. |
 | `mqtt.tls` | Use TLS for the broker connection. |
 | `mqtt.ca_cert` | Path to a CA certificate (PEM) to verify the broker. Empty → system CA bundle. |
 | `mqtt.client_cert` | Path to the client certificate (PEM) for mutual TLS. |
@@ -96,14 +102,17 @@ mqtt:
   client_cert: /ssl/xxxx-certificate.pem.crt
   client_key: /ssl/xxxx-private.pem.key
   topic_prefix: heartbeat
-  client_id: heartbeat        # must be permitted by the IoT policy
+  client_id: my-thing-name    # = the AWS IoT thing name; see note below
 ```
 
 Notes:
 - Leave `username`/`password` empty for AWS IoT.
 - AWS IoT supports QoS 0 and 1 only — the default QoS 1 is fine.
-- The certificate must be **active** and its policy must allow publishing to the
-  topics (`heartbeat/#` by default), and `iot:Connect` for the `client_id`.
+- Set `client_id` to the **thing name**. Topics are then published under
+  `<client_id>/<topic_prefix>/...` (e.g. `my-thing-name/heartbeat/gateway/default_gateway`),
+  which matches policies that restrict publishing to thing-name-prefixed topics.
+- The certificate must be **active** and its policy must allow `iot:Connect` for
+  the `client_id` and `iot:Publish` on those topics.
 
 Standalone (outside Home Assistant), mount the certs and point the env vars at them:
 

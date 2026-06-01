@@ -69,8 +69,8 @@ def test_no_tls_no_cert_calls(monkeypatch):
     assert count["n"] == 0
 
 
-def test_topic_format(monkeypatch):
-    pub = MqttPublisher(MqttConfig(host="x", topic_prefix="hb", qos=0))
+def test_topic_format_without_client_id(monkeypatch):
+    pub = MqttPublisher(MqttConfig(host="x", topic_prefix="hb", qos=0))  # client_id default ""
     pub._connected.set()
     captured = {}
 
@@ -83,6 +83,20 @@ def test_topic_format(monkeypatch):
     assert pub.publish_result('{"x":1}', "gateway", "default_gateway") is True
     assert captured["topic"] == "hb/gateway/default_gateway"
     assert captured["payload"] == '{"x":1}'
+
+
+def test_topic_namespaced_by_client_id(monkeypatch):
+    pub = MqttPublisher(MqttConfig(host="x", topic_prefix="hb", qos=0, client_id="thing-1"))
+    pub._connected.set()
+    captured = {}
+
+    def fake_publish(topic, payload, qos, retain):
+        captured["topic"] = topic
+        return _FakeInfo()
+
+    monkeypatch.setattr(pub._client, "publish", fake_publish)
+    pub.publish_result('{"x":1}', "gateway", "default_gateway")
+    assert captured["topic"] == "thing-1/hb/gateway/default_gateway"
 
 
 def test_flush_publishes_and_deletes(monkeypatch):
