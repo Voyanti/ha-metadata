@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/apps/configuration#app-configuration
 name: Heartbeat
-version: "1.0.0"
+version: "1.1.0"
 slug: heartbeat
 description: Network heartbeat checker (gateway/DNS/MQTT) with SQLite store-and-forward
 url: "https://github.com/Voyanti/ha-metadata/tree/main/heartbeat"
@@ -11,6 +11,8 @@ init: false
 host_network: true        # so the gateway check sees the real LAN default route
 privileged:
   - NET_RAW               # raw ICMP sockets for ping
+map:
+  - ssl:ro                # read MQTT TLS certs/keys from /ssl (e.g. AWS IoT)
 image: "ghcr.io/voyanti/heartbeat"
 options:
   heartbeat_interval: 60
@@ -29,6 +31,10 @@ options:
     password: ""
     topic_prefix: heartbeat
     tls: false
+    ca_cert: ""
+    client_cert: ""
+    client_key: ""
+    tls_insecure: false
 schema:
   heartbeat_interval: int(5,)
   check_gateway: bool
@@ -44,3 +50,7 @@ schema:
     password: password?
     topic_prefix: str
     tls: bool
+    ca_cert: str?
+    client_cert: str?
+    client_key: str?
+    tls_insecure: bool

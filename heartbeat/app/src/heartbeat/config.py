@@ -41,6 +41,11 @@ class MqttConfig:
     qos: int = 1
     retain: bool = False
     client_id: str = "heartbeat"
+    # Mutual TLS (e.g. AWS IoT Core): paths to PEM files.
+    ca_cert: str | None = None
+    client_cert: str | None = None
+    client_key: str | None = None
+    tls_insecure: bool = False
 
 
 @dataclass(frozen=True)
@@ -161,6 +166,10 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         qos=int(mqtt_opts.get("qos", mqtt.qos)),
         retain=_as_bool(mqtt_opts.get("retain", mqtt.retain)),
         client_id=str(mqtt_opts.get("client_id", mqtt.client_id)),
+        ca_cert=_clean_cred(mqtt_opts.get("ca_cert", mqtt.ca_cert)),
+        client_cert=_clean_cred(mqtt_opts.get("client_cert", mqtt.client_cert)),
+        client_key=_clean_cred(mqtt_opts.get("client_key", mqtt.client_key)),
+        tls_insecure=_as_bool(mqtt_opts.get("tls_insecure", mqtt.tls_insecure)),
     )
 
     # 2) environment variable overrides ------------------------------------- #
@@ -208,5 +217,13 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         mqtt = replace(mqtt, retain=_as_bool(e["HEARTBEAT_MQTT_RETAIN"]))
     if "HEARTBEAT_MQTT_CLIENT_ID" in e:
         mqtt = replace(mqtt, client_id=e["HEARTBEAT_MQTT_CLIENT_ID"])
+    if "HEARTBEAT_MQTT_CA_CERT" in e:
+        mqtt = replace(mqtt, ca_cert=_clean_cred(e["HEARTBEAT_MQTT_CA_CERT"]))
+    if "HEARTBEAT_MQTT_CLIENT_CERT" in e:
+        mqtt = replace(mqtt, client_cert=_clean_cred(e["HEARTBEAT_MQTT_CLIENT_CERT"]))
+    if "HEARTBEAT_MQTT_CLIENT_KEY" in e:
+        mqtt = replace(mqtt, client_key=_clean_cred(e["HEARTBEAT_MQTT_CLIENT_KEY"]))
+    if "HEARTBEAT_MQTT_TLS_INSECURE" in e:
+        mqtt = replace(mqtt, tls_insecure=_as_bool(e["HEARTBEAT_MQTT_TLS_INSECURE"]))
 
     return replace(cfg, mqtt=mqtt)

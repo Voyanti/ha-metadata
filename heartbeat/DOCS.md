@@ -65,6 +65,58 @@ mqtt:
 | `mqtt.username` / `mqtt.password` | Optional broker credentials. |
 | `mqtt.topic_prefix` | Topic prefix; results go to `<prefix>/<type>/<name>`. |
 | `mqtt.tls` | Use TLS for the broker connection. |
+| `mqtt.ca_cert` | Path to a CA certificate (PEM) to verify the broker. Empty → system CA bundle. |
+| `mqtt.client_cert` | Path to the client certificate (PEM) for mutual TLS. |
+| `mqtt.client_key` | Path to the client private key (PEM) for mutual TLS. |
+| `mqtt.tls_insecure` | Skip broker hostname/cert verification (testing only — leave `false`). |
+
+Setting any of `ca_cert` / `client_cert` enables TLS even if `tls` is left `false`.
+
+## Connecting to AWS IoT Core (mutual TLS)
+
+AWS IoT Core authenticates clients with an X.509 **client certificate + private
+key** over TLS on port **8883** — there is no username/password. In AWS IoT,
+create a Thing, generate/attach a certificate, attach a policy allowing
+`iot:Connect` / `iot:Publish` (on your topics), and note your account's
+**ATS data endpoint** (`xxxx-ats.iot.<region>.amazonaws.com`).
+
+1. Copy the three PEM files to the Home Assistant `/ssl` directory (this app maps
+   `/ssl` read-only):
+   - the Amazon root CA, e.g. `AmazonRootCA1.pem`
+   - the device certificate, e.g. `xxxx-certificate.pem.crt`
+   - the device private key, e.g. `xxxx-private.pem.key`
+2. Configure MQTT:
+
+```yaml
+mqtt:
+  host: "xxxx-ats.iot.eu-north-1.amazonaws.com"
+  port: 8883
+  tls: true
+  ca_cert: /ssl/AmazonRootCA1.pem
+  client_cert: /ssl/xxxx-certificate.pem.crt
+  client_key: /ssl/xxxx-private.pem.key
+  topic_prefix: heartbeat
+  client_id: heartbeat        # must be permitted by the IoT policy
+```
+
+Notes:
+- Leave `username`/`password` empty for AWS IoT.
+- AWS IoT supports QoS 0 and 1 only — the default QoS 1 is fine.
+- The certificate must be **active** and its policy must allow publishing to the
+  topics (`heartbeat/#` by default), and `iot:Connect` for the `client_id`.
+
+Standalone (outside Home Assistant), mount the certs and point the env vars at them:
+
+```bash
+docker run --rm --network host --cap-add NET_RAW \
+  -e HEARTBEAT_MQTT_HOST=xxxx-ats.iot.eu-north-1.amazonaws.com \
+  -e HEARTBEAT_MQTT_PORT=8883 -e HEARTBEAT_MQTT_TLS=true \
+  -e HEARTBEAT_MQTT_CA_CERT=/certs/AmazonRootCA1.pem \
+  -e HEARTBEAT_MQTT_CLIENT_CERT=/certs/device.pem.crt \
+  -e HEARTBEAT_MQTT_CLIENT_KEY=/certs/private.pem.key \
+  -v /path/to/certs:/certs:ro -v hb-data:/data \
+  <image>
+```
 
 ## Permissions
 

@@ -1,3 +1,9 @@
+## 1.1.0
+
+- Support mutual-TLS MQTT brokers (e.g. AWS IoT Core): `mqtt.ca_cert`,
+  `mqtt.client_cert`, `mqtt.client_key`, and `mqtt.tls_insecure` options.
+- Map `/ssl` read-only so certificate/key files can be referenced from there.
+
 ## 1.0.0
 
 - Initial release.

@@ -1,3 +1,5 @@
+import paho.mqtt.client as mqtt
+
 from heartbeat.config import MqttConfig
 from heartbeat.models import CheckResult
 from heartbeat.publisher import MqttPublisher
@@ -30,6 +32,41 @@ class _FakeInfo:
 
     def wait_for_publish(self, timeout=None):
         return None
+
+
+def test_mutual_tls_passes_cert_paths(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(
+        mqtt.Client, "tls_set",
+        lambda self, ca_certs=None, certfile=None, keyfile=None, **kw: calls.update(
+            ca=ca_certs, cert=certfile, key=keyfile
+        ),
+    )
+    MqttPublisher(MqttConfig(
+        host="x", tls=True,
+        ca_cert="/ssl/AmazonRootCA1.pem",
+        client_cert="/ssl/device.pem.crt",
+        client_key="/ssl/private.pem.key",
+    ))
+    assert calls == {
+        "ca": "/ssl/AmazonRootCA1.pem",
+        "cert": "/ssl/device.pem.crt",
+        "key": "/ssl/private.pem.key",
+    }
+
+
+def test_certs_enable_tls_without_explicit_flag(monkeypatch):
+    count = {"n": 0}
+    monkeypatch.setattr(mqtt.Client, "tls_set", lambda self, **kw: count.__setitem__("n", count["n"] + 1))
+    MqttPublisher(MqttConfig(host="x", client_cert="/ssl/device.pem.crt"))  # tls flag stays False
+    assert count["n"] == 1
+
+
+def test_no_tls_no_cert_calls(monkeypatch):
+    count = {"n": 0}
+    monkeypatch.setattr(mqtt.Client, "tls_set", lambda self, **kw: count.__setitem__("n", count["n"] + 1))
+    MqttPublisher(MqttConfig(host="x"))
+    assert count["n"] == 0
 
 
 def test_topic_format(monkeypatch):

@@ -101,6 +101,31 @@ def test_bool_coercion():
     assert cfg.check_gateway is True
 
 
+def test_mqtt_tls_certs_from_options(tmp_path):
+    f = tmp_path / "options.json"
+    f.write_text(json.dumps({"mqtt": {
+        "tls": True,
+        "ca_cert": "/ssl/AmazonRootCA1.pem",
+        "client_cert": "/ssl/device.pem.crt",
+        "client_key": "/ssl/private.pem.key",
+    }}))
+    cfg = load_config(environ={"HEARTBEAT_OPTIONS_FILE": str(f)})
+    assert cfg.mqtt.tls is True
+    assert cfg.mqtt.ca_cert == "/ssl/AmazonRootCA1.pem"
+    assert cfg.mqtt.client_cert == "/ssl/device.pem.crt"
+    assert cfg.mqtt.client_key == "/ssl/private.pem.key"
+
+
+def test_mqtt_tls_certs_default_none_and_env_override():
+    cfg = load_config(environ=NO_FILE)
+    assert cfg.mqtt.ca_cert is None
+    assert cfg.mqtt.client_cert is None
+    cfg = load_config(environ={**NO_FILE, "HEARTBEAT_MQTT_CLIENT_CERT": "/ssl/c.crt",
+                               "HEARTBEAT_MQTT_CA_CERT": ""})
+    assert cfg.mqtt.client_cert == "/ssl/c.crt"
+    assert cfg.mqtt.ca_cert is None  # empty string -> None
+
+
 def test_effective_broker_dns_target():
     cfg = load_config(environ={**NO_FILE, "HEARTBEAT_MQTT_HOST": "mybroker"})
     assert cfg.effective_broker_dns_target == "mybroker"

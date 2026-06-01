@@ -29,8 +29,17 @@ class MqttPublisher:
         )
         if cfg.username:
             self._client.username_pw_set(cfg.username, cfg.password or None)
-        if cfg.tls:
-            self._client.tls_set()
+        # Enable TLS when explicitly requested, or implicitly when any cert is
+        # provided (mutual TLS, e.g. AWS IoT Core). ca_cert/client_cert/
+        # client_key default to the system CA bundle / no client cert when None.
+        if cfg.tls or cfg.ca_cert or cfg.client_cert:
+            self._client.tls_set(
+                ca_certs=cfg.ca_cert,
+                certfile=cfg.client_cert,
+                keyfile=cfg.client_key,
+            )
+            if cfg.tls_insecure:
+                self._client.tls_insecure_set(True)
         self._client.reconnect_delay_set(min_delay=1, max_delay=60)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
