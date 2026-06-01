@@ -33,6 +33,6 @@ def test_gateway_regex_rejects_garbage():
 
 def test_hostname_regex():
     assert HOSTNAME_RE.match("broker.example.com")
-    assert HOSTNAME_RE.match("a2kiqabbj57ujo-ats.iot.eu-north-1.amazonaws.com")
+    assert HOSTNAME_RE.match("xxxxxxxxxxxxxx-ats.iot.eu-north-1.amazonaws.com")
     assert not HOSTNAME_RE.match("bad host")
     assert not HOSTNAME_RE.match("a/b$c")
