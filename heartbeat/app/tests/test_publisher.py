@@ -69,8 +69,8 @@ def test_no_tls_no_cert_calls(monkeypatch):
     assert count["n"] == 0
 
 
-def test_topic_format_without_client_id(monkeypatch):
-    pub = MqttPublisher(MqttConfig(host="x", topic_prefix="hb", qos=0))  # client_id default ""
+def _capture_topic(monkeypatch, cfg):
+    pub = MqttPublisher(cfg)
     pub._connected.set()
     captured = {}
 
@@ -80,23 +80,37 @@ def test_topic_format_without_client_id(monkeypatch):
         return _FakeInfo()
 
     monkeypatch.setattr(pub._client, "publish", fake_publish)
-    assert pub.publish_result('{"x":1}', "gateway", "default_gateway") is True
-    assert captured["topic"] == "hb/gateway/default_gateway"
+    pub.publish_result('{"x":1}', "gateway", "default_gateway")
+    return captured
+
+
+def test_topic_default_no_prefix(monkeypatch):
+    captured = _capture_topic(monkeypatch, MqttConfig(host="x", qos=0))  # topic_prefix ""
+    assert captured["topic"] == "heartbeat/gateway/default_gateway"
     assert captured["payload"] == '{"x":1}'
 
 
-def test_topic_namespaced_by_client_id(monkeypatch):
-    pub = MqttPublisher(MqttConfig(host="x", topic_prefix="hb", qos=0, client_id="thing-1"))
-    pub._connected.set()
-    captured = {}
+def test_topic_with_custom_prefix(monkeypatch):
+    captured = _capture_topic(monkeypatch, MqttConfig(host="x", qos=0, topic_prefix="mysite"))
+    assert captured["topic"] == "mysite/heartbeat/gateway/default_gateway"
 
-    def fake_publish(topic, payload, qos, retain):
-        captured["topic"] = topic
-        return _FakeInfo()
 
-    monkeypatch.setattr(pub._client, "publish", fake_publish)
-    pub.publish_result('{"x":1}', "gateway", "default_gateway")
-    assert captured["topic"] == "thing-1/hb/gateway/default_gateway"
+def test_topic_excludes_client_id(monkeypatch):
+    # client_id must NOT appear in the topic
+    captured = _capture_topic(monkeypatch, MqttConfig(host="x", qos=0, client_id="thing-1"))
+    assert captured["topic"] == "heartbeat/gateway/default_gateway"
+
+
+def test_flush_warns_when_not_connected(caplog):
+    import logging
+
+    ob = make_outbox()
+    ob.enqueue(_result())
+    pub = MqttPublisher(MqttConfig(host="broker.example", port=1883))  # not connected
+    with caplog.at_level(logging.WARNING):
+        published, remaining = pub.flush(ob)
+    assert published == 0 and remaining == 1
+    assert any("not connected" in r.getMessage() for r in caplog.records)
 
 
 def test_flush_publishes_and_deletes(monkeypatch):

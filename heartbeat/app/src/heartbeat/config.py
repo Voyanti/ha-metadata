@@ -37,7 +37,7 @@ class MqttConfig:
     username: str | None = None
     password: str | None = None
     tls: bool = False
-    topic_prefix: str = "heartbeat"
+    topic_prefix: str = ""  # optional custom namespace -> <topic_prefix>/heartbeat/<type>/<name>
     qos: int = 1
     retain: bool = False
     client_id: str = ""  # empty -> no topic namespace + broker auto-generates the connection id

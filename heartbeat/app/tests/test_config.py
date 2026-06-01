@@ -126,6 +126,10 @@ def test_mqtt_tls_certs_default_none_and_env_override():
     assert cfg.mqtt.ca_cert is None  # empty string -> None
 
 
+def test_mqtt_topic_prefix_default_empty():
+    assert load_config(environ=NO_FILE).mqtt.topic_prefix == ""
+
+
 def test_mqtt_client_id_default_empty():
     assert load_config(environ=NO_FILE).mqtt.client_id == ""
 

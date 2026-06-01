@@ -57,8 +57,8 @@ class HeartbeatService:
             self.outbox.enqueue(result)  # persist BEFORE publishing
         failures = sum(1 for r in results if not r.success)
         _LOGGER.info(
-            "Ran %d check(s); %d failed; queue=%d",
-            len(results), failures, self.outbox.count(),
+            "Ran %d check(s); %d failed; queue=%d; mqtt_connected=%s",
+            len(results), failures, self.outbox.count(), self.publisher.connected,
         )
         self.publisher.flush(self.outbox, limit=self.cfg.flush_batch)
         self.outbox.trim_backlog(self.cfg.max_backlog_rows)

@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/apps/configuration#app-configuration
 name: Heartbeat
-version: "1.2.0"
+version: "1.3.0"
 slug: heartbeat
 description: Network heartbeat checker (gateway/DNS/MQTT) with SQLite store-and-forward
 url: "https://github.com/Voyanti/ha-metadata/tree/main/heartbeat"
@@ -29,8 +29,8 @@ options:
     port: 1883
     username: ""
     password: ""
-    topic_prefix: heartbeat
-    client_id: ""
+    topic_prefix: ""        # optional custom namespace -> <topic_prefix>/heartbeat/<type>/<name>
+    client_id: ""           # MQTT connection id (e.g. AWS IoT thing name); not part of the topic
     tls: false
     ca_cert: ""
     client_cert: ""

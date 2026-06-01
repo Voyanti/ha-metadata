@@ -8,13 +8,14 @@ On each `heartbeat_interval` the app runs three checks:
 
 | Check | What it does | MQTT topic |
 |-------|--------------|------------|
-| Gateway ping | Discovers the default gateway (`ip route show default 0.0.0.0/0`) and runs `ping -c 2 -W 2 <gw>` | `<prefix>/gateway/default_gateway` |
-| Public DNS ping | `ping -c 2 -W 2 <host>` for each configured target | `<prefix>/public_dns/<name>` |
-| Broker DNS resolution | `getent hosts <host> \|\| nslookup <host>` and parses the resolved IPs | `<prefix>/mqtt_broker/mqtt_broker_endpoint` |
+| Gateway ping | Discovers the default gateway (`ip route show default 0.0.0.0/0`) and runs `ping -c 2 -W 2 <gw>` | `heartbeat/gateway/default_gateway` |
+| Public DNS ping | `ping -c 2 -W 2 <host>` for each configured target | `heartbeat/public_dns/<name>` |
+| Broker DNS resolution | `getent hosts <host> \|\| nslookup <host>` and parses the resolved IPs | `heartbeat/mqtt_broker/mqtt_broker_endpoint` |
 
-If `mqtt.client_id` is set, every topic is additionally namespaced with it —
-`<client_id>/<prefix>/<type>/<name>` (e.g. `thing-1/heartbeat/gateway/default_gateway`).
-Leave it empty to keep the topics above unchanged.
+The full topic is `[<topic_prefix>/]heartbeat/<type>/<name>`. Set `mqtt.topic_prefix`
+to a custom namespace (e.g. a site name or AWS IoT thing name) and every topic is
+prefixed with it — `mysite/heartbeat/gateway/default_gateway`. Leave it empty
+(the default) to get the topics above. `mqtt.client_id` is not part of the topic.
 
 Each result is a JSON document:
 
@@ -53,8 +54,8 @@ mqtt:
   port: 1883
   username: ""
   password: ""
-  topic_prefix: heartbeat
-  client_id: ""              # set to namespace topics: <client_id>/<prefix>/...
+  topic_prefix: ""           # optional custom namespace: <topic_prefix>/heartbeat/...
+  client_id: ""              # MQTT connection id (e.g. AWS IoT thing name); not in the topic
   tls: false
 ```
 
@@ -68,8 +69,8 @@ mqtt:
 | `mqtt.host` | MQTT broker hostname/IP. **Empty disables publishing** (results queue). |
 | `mqtt.port` | Broker port (default 1883, or 8883 for TLS). |
 | `mqtt.username` / `mqtt.password` | Optional broker credentials. |
-| `mqtt.topic_prefix` | Topic prefix; results go to `<prefix>/<type>/<name>`. |
-| `mqtt.client_id` | MQTT client identifier. If set, topics are namespaced as `<client_id>/<prefix>/...`. Empty → broker auto-generates the connection id and topics are not namespaced. |
+| `mqtt.topic_prefix` | Optional custom namespace. Topics are `[<topic_prefix>/]heartbeat/<type>/<name>`. Empty → `heartbeat/<type>/<name>`. |
+| `mqtt.client_id` | MQTT connection identifier (e.g. an AWS IoT thing name). **Not** part of the topic. Empty → the broker auto-generates one. |
 | `mqtt.tls` | Use TLS for the broker connection. |
 | `mqtt.ca_cert` | Path to a CA certificate (PEM) to verify the broker. Empty → system CA bundle. |
 | `mqtt.client_cert` | Path to the client certificate (PEM) for mutual TLS. |
@@ -101,16 +102,17 @@ mqtt:
   ca_cert: /ssl/AmazonRootCA1.pem
   client_cert: /ssl/xxxx-certificate.pem.crt
   client_key: /ssl/xxxx-private.pem.key
-  topic_prefix: heartbeat
-  client_id: my-thing-name    # = the AWS IoT thing name; see note below
+  client_id: my-thing-name    # connection id = the AWS IoT thing name
+  topic_prefix: my-thing-name # publish under <thing-name>/heartbeat/... per the policy
 ```
 
 Notes:
 - Leave `username`/`password` empty for AWS IoT.
 - AWS IoT supports QoS 0 and 1 only — the default QoS 1 is fine.
-- Set `client_id` to the **thing name**. Topics are then published under
-  `<client_id>/<topic_prefix>/...` (e.g. `my-thing-name/heartbeat/gateway/default_gateway`),
-  which matches policies that restrict publishing to thing-name-prefixed topics.
+- Set `client_id` to the **thing name** (used for `iot:Connect`), and set
+  `topic_prefix` to the same thing name so topics become
+  `my-thing-name/heartbeat/gateway/default_gateway`, matching policies that
+  restrict publishing to thing-name-prefixed topics.
 - The certificate must be **active** and its policy must allow `iot:Connect` for
   the `client_id` and `iot:Publish` on those topics.
 

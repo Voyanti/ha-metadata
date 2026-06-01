@@ -1,3 +1,12 @@
+## 1.3.0
+
+- Topics are now `[<topic_prefix>/]heartbeat/<type>/<name>`. `topic_prefix` is an
+  optional custom namespace (default empty → `heartbeat/...` as before);
+  `client_id` is no longer part of the topic — it is only the MQTT connection id.
+- Log MQTT connectivity loudly: warn (not debug) when the broker is not connected
+  and results are queued, warn on unconfirmed publishes, surface paho's own
+  connection errors, and include `mqtt_connected` in the per-tick log line.
+
 ## 1.2.0
 
 - Add `mqtt.client_id` option. When set, published topics are namespaced with it

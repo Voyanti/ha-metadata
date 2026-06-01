@@ -43,6 +43,8 @@ class MqttPublisher:
         self._client.reconnect_delay_set(min_delay=1, max_delay=60)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
+        # Surface paho's own connection diagnostics (socket errors, retries).
+        self._client.enable_logger(logging.getLogger("heartbeat.mqtt"))
 
     # -- callbacks ---------------------------------------------------------- #
     def _on_connect(self, client, userdata, flags, reason_code, properties=None) -> None:
@@ -77,11 +79,11 @@ class MqttPublisher:
             _LOGGER.warning("MQTT connect_async failed: %s", exc)
 
     def _topic(self, target_type: str, target_name: str) -> str:
-        # When client_id is set, namespace the topic with it so multiple
-        # instances can share a broker, and to satisfy brokers that only permit
-        # publishing to client-id-prefixed topics: <client_id>/<prefix>/...
-        base = f"{self.cfg.topic_prefix}/{target_type}/{target_name}"
-        return f"{self.cfg.client_id}/{base}" if self.cfg.client_id else base
+        # Topic: [<topic_prefix>/]heartbeat/<type>/<name>. topic_prefix is an
+        # optional custom namespace (e.g. a site or AWS IoT thing name); when
+        # empty the topic is just heartbeat/<type>/<name>.
+        base = f"heartbeat/{target_type}/{target_name}"
+        return f"{self.cfg.topic_prefix}/{base}" if self.cfg.topic_prefix else base
 
     def publish_result(self, payload_json: str, target_type: str, target_name: str) -> bool:
         if not self.connected:
@@ -95,13 +97,18 @@ class MqttPublisher:
             _LOGGER.warning("MQTT publish error on %s: %s", topic, exc)
             return False
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            _LOGGER.warning("MQTT publish to %s returned rc=%s", topic, info.rc)
             return False
         if self.cfg.qos > 0:
             try:
                 info.wait_for_publish(timeout=5.0)
-            except (ValueError, RuntimeError):
+            except (ValueError, RuntimeError) as exc:
+                _LOGGER.warning("MQTT publish to %s not confirmed: %s", topic, exc)
                 return False
-            return info.is_published()
+            if not info.is_published():
+                _LOGGER.warning("MQTT publish to %s not confirmed (timeout)", topic)
+                return False
+            return True
         return True
 
     def flush(self, outbox: Outbox, limit: int = 200) -> tuple[int, int]:
@@ -112,7 +119,10 @@ class MqttPublisher:
         if not rows:
             return (0, 0)
         if not self.connected:
-            _LOGGER.debug("MQTT not connected; %d row(s) remain queued", len(rows))
+            _LOGGER.warning(
+                "MQTT not connected to %s:%s; %d result(s) queued (will retry)",
+                self.cfg.host or "<unset>", self.cfg.port, outbox.count(),
+            )
             return (0, len(rows))
 
         published = 0
