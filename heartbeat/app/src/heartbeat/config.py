@@ -63,7 +63,7 @@ class Config:
     ping_count: int = 2
     ping_timeout: int = 2
     cmd_timeout: float = 10.0
-    max_backlog_rows: int = 100_000
+    max_backlog_rows: int = 300_000
     flush_batch: int = 200
     flush_interval: float = 15.0  # seconds between flush cycles (independent of checks)
     concurrent_pings: bool = True
