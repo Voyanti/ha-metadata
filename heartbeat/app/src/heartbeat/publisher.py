@@ -161,9 +161,14 @@ class MqttPublisher:
             else:
                 inflight.append((row, info))
 
-        # Phase 2: confirm each independently — no stop-at-first-failure.
+        # Phase 2: confirm each independently — no stop-at-first-failure. If the
+        # broker drops mid-batch, stop waiting: each unacked confirm would block
+        # for the full timeout, so leave the rest queued to retry next cycle.
         confirmed_ids = []
-        for row, info in inflight:
+        for i, (row, info) in enumerate(inflight):
+            if not self.connected:
+                unconfirmed_ids.extend(r.id for r, _ in inflight[i:])
+                break
             if self._confirm(info, self._topic(row.target_type, row.target_name)):
                 confirmed_ids.append(row.id)
             else:

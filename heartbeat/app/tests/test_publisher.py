@@ -41,13 +41,13 @@ class _FakeInfo:
 
 
 class _FakeClient:
-    """Records publish order and hands back a _FakeInfo. ``fail_from`` makes the
-    confirm of that publish (and later ones) report unpublished. ``events``, if
-    given, records the interleaving of publishes and confirm-waits."""
+    """Records publish order and hands back a _FakeInfo. ``fail_at`` is a set of
+    publish indices whose confirm reports unpublished (all others confirm).
+    ``events``, if given, records the interleaving of publishes and confirm-waits."""
 
-    def __init__(self, events=None, fail_from=None):
+    def __init__(self, events=None, fail_at=frozenset()):
         self._events = events
-        self._fail_from = fail_from
+        self._fail_at = fail_at
         self.published = []  # topics, in publish order
         self.on_connect = None
         self.on_disconnect = None
@@ -57,8 +57,7 @@ class _FakeClient:
         self.published.append(topic)
         if self._events is not None:
             self._events.append("publish")
-        ok = self._fail_from is None or idx < self._fail_from
-        return _FakeInfo(events=self._events, published=ok)
+        return _FakeInfo(events=self._events, published=idx not in self._fail_at)
 
 
 def test_mutual_tls_passes_cert_paths(monkeypatch):
@@ -177,14 +176,15 @@ def test_flush_broker_down_keeps_rows():
     assert ob.count() == 1
 
 
-def test_flush_partial_failure_stops():
+def test_flush_confirms_each_independently():
     ob = make_outbox()
     for i in range(3):
         ob.enqueue(_result(name=f"t{i}"))
-    # First confirm succeeds, the second and beyond report unpublished.
-    pub = MqttPublisher(MqttConfig(host="x", qos=1), client=_FakeClient(fail_from=1))
+    # Publish order is LIFO (t2, t1, t0); the FIRST publish fails to confirm.
+    # The later two must still be delivered and deleted — no stop-at-first.
+    pub = MqttPublisher(MqttConfig(host="x", qos=1), client=_FakeClient(fail_at={0}))
     pub._connected.set()
     n, remaining = pub.flush(ob, limit=10)
-    assert n == 1
-    assert remaining == 2
-    assert ob.count() == 2  # two rows remain queued
+    assert n == 2
+    assert remaining == 1
+    assert [r.target_name for r in ob.fetch_pending(10)] == ["t2"]  # only the failure retries

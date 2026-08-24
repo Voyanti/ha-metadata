@@ -46,8 +46,15 @@ def main() -> int:
 
     # The check writer and the MQTT flusher run independently: a publish backlog
     # never delays a check, and flushing is not tied to the heartbeat interval.
-    writer = threading.Thread(target=service.run_writer, args=(stop,), name="writer")
-    flusher = threading.Thread(target=service.run_flusher, args=(stop,), name="flusher")
+    # daemon=True: the outbox is durable, so if a thread is still parked in a
+    # broker round-trip at shutdown the process can still exit — the queued rows
+    # publish on the next start rather than blocking exit until SIGKILL.
+    writer = threading.Thread(
+        target=service.run_writer, args=(stop,), name="writer", daemon=True
+    )
+    flusher = threading.Thread(
+        target=service.run_flusher, args=(stop,), name="flusher", daemon=True
+    )
     writer.start()
     flusher.start()
 

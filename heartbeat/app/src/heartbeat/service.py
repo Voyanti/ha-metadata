@@ -89,8 +89,9 @@ class HeartbeatService:
                 _LOGGER.exception("Check tick failed")
             # Fixed-cadence scheduling: the sleep shrinks by however long the
             # tick took, so a slow check never pushes back the next one. A tick
-            # that overruns the interval makes the next one fire immediately.
-            next_at += self.cfg.heartbeat_interval
+            # that overruns the interval makes the next one fire immediately; the
+            # max() drops missed slots so a long overrun never bursts to catch up.
+            next_at = max(next_at + self.cfg.heartbeat_interval, now())
             stop.wait(max(0.0, next_at - now()))
 
     def run_flusher(self, stop: threading.Event) -> None:
