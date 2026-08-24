@@ -48,6 +48,10 @@ class MqttPublisher:
             if cfg.tls_insecure:
                 client.tls_insecure_set(True)
         client.reconnect_delay_set(min_delay=1, max_delay=60)
+        # Allow many qos>0 messages in flight at once so a backlog flush
+        # pipelines instead of blocking on each PUBACK in turn. Capped at AWS
+        # IoT Core's per-connection in-flight limit (100).
+        client.max_inflight_messages_set(100)
         # Surface paho's own connection diagnostics (socket errors, retries).
         client.enable_logger(logging.getLogger("heartbeat.mqtt"))
         return client
@@ -91,36 +95,53 @@ class MqttPublisher:
         base = f"heartbeat/{target_type}/{target_name}"
         return f"{self.cfg.topic_prefix}/{base}" if self.cfg.topic_prefix else base
 
-    def publish_result(self, payload_json: str, target_type: str, target_name: str) -> bool:
-        if not self.connected:
-            return False
-        topic = self._topic(target_type, target_name)
+    def _send(self, topic: str, payload_json: str):
+        """Issue a publish without blocking on its PUBACK. Returns paho's
+        message info, or ``None`` if the client rejected the send outright."""
         try:
             info = self._client.publish(
                 topic, payload_json, qos=self.cfg.qos, retain=self.cfg.retain
             )
         except (ValueError, RuntimeError) as exc:
             _LOGGER.warning("MQTT publish error on %s: %s", topic, exc)
-            return False
+            return None
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             _LOGGER.warning("MQTT publish to %s returned rc=%s", topic, info.rc)
-            return False
-        if self.cfg.qos > 0:
-            try:
-                info.wait_for_publish(timeout=5.0)
-            except (ValueError, RuntimeError) as exc:
-                _LOGGER.warning("MQTT publish to %s not confirmed: %s", topic, exc)
-                return False
-            if not info.is_published():
-                _LOGGER.warning("MQTT publish to %s not confirmed (timeout)", topic)
-                return False
+            return None
+        return info
+
+    def _confirm(self, info, topic: str) -> bool:
+        """Block until the broker acknowledges a qos>0 publish. qos 0 is
+        fire-and-forget and confirms immediately."""
+        if self.cfg.qos == 0:
             return True
+        try:
+            info.wait_for_publish(timeout=5.0)
+        except (ValueError, RuntimeError) as exc:
+            _LOGGER.warning("MQTT publish to %s not confirmed: %s", topic, exc)
+            return False
+        if not info.is_published():
+            _LOGGER.warning("MQTT publish to %s not confirmed (timeout)", topic)
+            return False
         return True
 
+    def publish_result(self, payload_json: str, target_type: str, target_name: str) -> bool:
+        if not self.connected:
+            return False
+        topic = self._topic(target_type, target_name)
+        info = self._send(topic, payload_json)
+        return info is not None and self._confirm(info, topic)
+
     def flush(self, outbox: Outbox, limit: int = 200) -> tuple[int, int]:
-        """Publish pending rows newest-first, deleting each on success. Stops at
-        the first failure so the rest retry next tick. Returns
-        ``(published, remaining_in_batch)``."""
+        """Publish pending rows newest-first. Every publish is issued first, so
+        the messages go in flight concurrently on paho's network thread (bounded
+        by max_inflight_messages); then the PUBACKs are awaited in order and each
+        confirmed row is deleted. Stops at the first unconfirmed row so it and
+        the rest retry next tick. Returns ``(published, remaining_in_batch)``.
+
+        A row published just before an unconfirmed one may already have reached
+        the broker; keeping it queued can re-send it next tick. That is fine
+        under qos=1 (at-least-once) — consumers dedupe on observed_at."""
         rows = outbox.fetch_pending(limit)
         if not rows:
             return (0, 0)
@@ -131,14 +152,25 @@ class MqttPublisher:
             )
             return (0, len(rows))
 
-        published = 0
+        # Phase 1: fire all publishes without blocking, stopping at the first
+        # the client refuses to send.
+        inflight = []  # (row, info) in fetch order
         for row in rows:
-            if self.publish_result(row.payload_json, row.target_type, row.target_name):
-                outbox.delete([row.id])
-                published += 1
-            else:
-                outbox.increment_attempts([row.id])
+            info = self._send(self._topic(row.target_type, row.target_name), row.payload_json)
+            if info is None:
                 break
+            inflight.append((row, info))
+
+        # Phase 2: await confirmations in order; stop at the first failure.
+        published = 0
+        for row, info in inflight:
+            if not self._confirm(info, self._topic(row.target_type, row.target_name)):
+                break
+            outbox.delete([row.id])
+            published += 1
+
+        if published < len(rows):
+            outbox.increment_attempts([rows[published].id])
 
         remaining = len(rows) - published
         if published:

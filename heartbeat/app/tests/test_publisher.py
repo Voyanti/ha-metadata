@@ -27,11 +27,38 @@ def make_outbox() -> Outbox:
 class _FakeInfo:
     rc = 0  # mqtt.MQTT_ERR_SUCCESS
 
+    def __init__(self, events=None, published=True):
+        self._events = events
+        self._published = published
+
     def is_published(self):
-        return True
+        return self._published
 
     def wait_for_publish(self, timeout=None):
+        if self._events is not None:
+            self._events.append("wait")
         return None
+
+
+class _FakeClient:
+    """Records publish order and hands back a _FakeInfo. ``fail_from`` makes the
+    confirm of that publish (and later ones) report unpublished. ``events``, if
+    given, records the interleaving of publishes and confirm-waits."""
+
+    def __init__(self, events=None, fail_from=None):
+        self._events = events
+        self._fail_from = fail_from
+        self.published = []  # topics, in publish order
+        self.on_connect = None
+        self.on_disconnect = None
+
+    def publish(self, topic, payload, qos=0, retain=False):
+        idx = len(self.published)
+        self.published.append(topic)
+        if self._events is not None:
+            self._events.append("publish")
+        ok = self._fail_from is None or idx < self._fail_from
+        return _FakeInfo(events=self._events, published=ok)
 
 
 def test_mutual_tls_passes_cert_paths(monkeypatch):
@@ -113,22 +140,30 @@ def test_flush_warns_when_not_connected(caplog):
     assert any("not connected" in r.getMessage() for r in caplog.records)
 
 
-def test_flush_publishes_and_deletes(monkeypatch):
+def test_flush_publishes_and_deletes():
     ob = make_outbox()
     for i in range(3):
         ob.enqueue(_result(name=f"t{i}"))
-    pub = MqttPublisher(MqttConfig(host="x"))
+    pub = MqttPublisher(MqttConfig(host="x", qos=1), client=_FakeClient())
     pub._connected.set()
-    published = []
-    monkeypatch.setattr(
-        pub, "publish_result",
-        lambda payload, ttype, tname: (published.append((ttype, tname)), True)[1],
-    )
     n, remaining = pub.flush(ob, limit=10)
     assert n == 3
     assert remaining == 0
     assert ob.count() == 0
-    assert published[0] == ("public_dns", "t2")  # newest first (LIFO)
+    assert pub._client.published[0] == "heartbeat/public_dns/t2"  # newest first (LIFO)
+
+
+def test_flush_pipelines_all_publishes_before_confirming():
+    """Every publish is issued before any PUBACK is awaited — the messages go
+    in flight concurrently rather than one round-trip at a time."""
+    ob = make_outbox()
+    for i in range(3):
+        ob.enqueue(_result(name=f"t{i}"))
+    events = []
+    pub = MqttPublisher(MqttConfig(host="x", qos=1), client=_FakeClient(events=events))
+    pub._connected.set()
+    pub.flush(ob, limit=10)
+    assert events == ["publish", "publish", "publish", "wait", "wait", "wait"]
 
 
 def test_flush_broker_down_keeps_rows():
@@ -142,19 +177,14 @@ def test_flush_broker_down_keeps_rows():
     assert ob.count() == 1
 
 
-def test_flush_partial_failure_stops(monkeypatch):
+def test_flush_partial_failure_stops():
     ob = make_outbox()
     for i in range(3):
         ob.enqueue(_result(name=f"t{i}"))
-    pub = MqttPublisher(MqttConfig(host="x"))
+    # First confirm succeeds, the second and beyond report unpublished.
+    pub = MqttPublisher(MqttConfig(host="x", qos=1), client=_FakeClient(fail_from=1))
     pub._connected.set()
-    state = {"n": 0}
-
-    def fake_pub(payload, ttype, tname):
-        state["n"] += 1
-        return state["n"] == 1  # first succeeds, second fails
-
-    monkeypatch.setattr(pub, "publish_result", fake_pub)
     n, remaining = pub.flush(ob, limit=10)
     assert n == 1
+    assert remaining == 2
     assert ob.count() == 2  # two rows remain queued
