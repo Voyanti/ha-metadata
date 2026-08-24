@@ -96,9 +96,13 @@ class Outbox:
         return int(cur.lastrowid)
 
     def fetch_pending(self, limit: int = 200) -> list[PendingRow]:
+        """Return up to ``limit`` rows newest-first (LIFO). After an outage the
+        most recent checks publish before the older backlog, so live status
+        recovers first. Delivery order is not the source of truth: every payload
+        carries ``observed_at``, so consumers order by real observation time."""
         rows = self.conn.execute(
             "SELECT id, payload_json, target_type, target_name "
-            "FROM outbox ORDER BY id LIMIT ?",
+            "FROM outbox ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return [

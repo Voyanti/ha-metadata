@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from .checks import check_broker_dns, check_gateway, check_public_dns_target
@@ -63,11 +65,21 @@ class HeartbeatService:
         self.publisher.flush(self.outbox, limit=self.cfg.flush_batch)
         self.outbox.trim_backlog(self.cfg.max_backlog_rows)
 
-    def run_forever(self, stop: threading.Event) -> None:
+    def run_forever(
+        self, stop: threading.Event, *, now: Callable[[], float] | None = None
+    ) -> None:
+        # ``now`` is injectable so tests can drive the clock; production uses the
+        # monotonic clock.
+        now = now or time.monotonic
         _LOGGER.info("Heartbeat loop started; interval=%ss", self.cfg.heartbeat_interval)
+        next_at = now()
         while not stop.is_set():
             try:
                 self.tick()
             except Exception:  # noqa: BLE001 - one bad tick must not kill the loop
                 _LOGGER.exception("Heartbeat tick failed")
-            stop.wait(self.cfg.heartbeat_interval)
+            # Fixed-cadence scheduling: the sleep shrinks by however long the
+            # tick took, so a slow flush never pushes back the next tick. A tick
+            # that overruns the interval makes the next one fire immediately.
+            next_at += self.cfg.heartbeat_interval
+            stop.wait(max(0.0, next_at - now()))

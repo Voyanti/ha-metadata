@@ -31,9 +31,9 @@ def test_fetch_pending_order_and_limit():
     ob = make_outbox()
     ids = [ob.enqueue(_result(name=f"t{i}")) for i in range(5)]
     rows = ob.fetch_pending(limit=3)
-    assert [r.id for r in rows] == ids[:3]
+    assert [r.id for r in rows] == ids[::-1][:3]  # newest first (LIFO)
     assert rows[0].target_type == "public_dns"
-    assert rows[0].target_name == "t0"
+    assert rows[0].target_name == "t4"
 
 
 def test_delete():
@@ -60,7 +60,7 @@ def test_trim_backlog_drops_oldest():
     assert dropped == 6
     assert ob.count() == 4
     remaining = [r.id for r in ob.fetch_pending()]
-    assert remaining == ids[-4:]  # newest survive
+    assert sorted(remaining) == ids[-4:]  # newest survive (LIFO fetch order)
 
 
 def test_trim_backlog_noop_when_under_cap():

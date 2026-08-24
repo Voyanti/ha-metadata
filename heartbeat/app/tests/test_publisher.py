@@ -128,7 +128,7 @@ def test_flush_publishes_and_deletes(monkeypatch):
     assert n == 3
     assert remaining == 0
     assert ob.count() == 0
-    assert published[0] == ("public_dns", "t0")
+    assert published[0] == ("public_dns", "t2")  # newest first (LIFO)
 
 
 def test_flush_broker_down_keeps_rows():

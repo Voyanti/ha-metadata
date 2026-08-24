@@ -3,7 +3,7 @@
 Connection is asynchronous and runs in paho's background network thread, so the
 service loop never blocks on it. When the broker is unreachable, ``flush()``
 publishes nothing and the rows stay queued in the outbox; paho auto-reconnects
-and the backlog drains (oldest first) once it is back.
+and the backlog drains (newest first) once it is back.
 """
 
 from __future__ import annotations
@@ -20,31 +20,37 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class MqttPublisher:
-    def __init__(self, cfg: MqttConfig) -> None:
+    def __init__(self, cfg: MqttConfig, client: mqtt.Client | None = None) -> None:
+        # ``client`` is injectable so tests can substitute a fake MQTT client and
+        # exercise the real flush logic; production builds the paho client.
         self.cfg = cfg
         self._connected = threading.Event()
-        self._client = mqtt.Client(
+        self._client = client if client is not None else self._build_client(cfg)
+        self._client.on_connect = self._on_connect
+        self._client.on_disconnect = self._on_disconnect
+
+    def _build_client(self, cfg: MqttConfig) -> mqtt.Client:
+        client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             client_id=cfg.client_id or None,
         )
         if cfg.username:
-            self._client.username_pw_set(cfg.username, cfg.password or None)
+            client.username_pw_set(cfg.username, cfg.password or None)
         # Enable TLS when explicitly requested, or implicitly when any cert is
         # provided (mutual TLS, e.g. AWS IoT Core). ca_cert/client_cert/
         # client_key default to the system CA bundle / no client cert when None.
         if cfg.tls or cfg.ca_cert or cfg.client_cert:
-            self._client.tls_set(
+            client.tls_set(
                 ca_certs=cfg.ca_cert,
                 certfile=cfg.client_cert,
                 keyfile=cfg.client_key,
             )
             if cfg.tls_insecure:
-                self._client.tls_insecure_set(True)
-        self._client.reconnect_delay_set(min_delay=1, max_delay=60)
-        self._client.on_connect = self._on_connect
-        self._client.on_disconnect = self._on_disconnect
+                client.tls_insecure_set(True)
+        client.reconnect_delay_set(min_delay=1, max_delay=60)
         # Surface paho's own connection diagnostics (socket errors, retries).
-        self._client.enable_logger(logging.getLogger("heartbeat.mqtt"))
+        client.enable_logger(logging.getLogger("heartbeat.mqtt"))
+        return client
 
     # -- callbacks ---------------------------------------------------------- #
     def _on_connect(self, client, userdata, flags, reason_code, properties=None) -> None:
@@ -112,7 +118,7 @@ class MqttPublisher:
         return True
 
     def flush(self, outbox: Outbox, limit: int = 200) -> tuple[int, int]:
-        """Publish pending rows in id order, deleting each on success. Stops at
+        """Publish pending rows newest-first, deleting each on success. Stops at
         the first failure so the rest retry next tick. Returns
         ``(published, remaining_in_batch)``."""
         rows = outbox.fetch_pending(limit)
