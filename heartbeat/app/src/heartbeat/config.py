@@ -40,6 +40,7 @@ class MqttConfig:
     topic_prefix: str = ""  # optional custom namespace -> <topic_prefix>/heartbeat/<type>/<name>
     qos: int = 1
     retain: bool = False
+    max_inflight: int = 100  # IoT Core per-connection in-flight limit
     client_id: str = ""  # empty -> no topic namespace + broker auto-generates the connection id
     # Mutual TLS (e.g. AWS IoT Core): paths to PEM files.
     ca_cert: str | None = None
@@ -64,6 +65,7 @@ class Config:
     cmd_timeout: float = 10.0
     max_backlog_rows: int = 100_000
     flush_batch: int = 200
+    flush_interval: float = 15.0  # seconds between flush cycles (independent of checks)
     concurrent_pings: bool = True
     mqtt: MqttConfig = field(default_factory=MqttConfig)
 
@@ -165,6 +167,7 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         topic_prefix=str(mqtt_opts.get("topic_prefix", mqtt.topic_prefix)),
         qos=int(mqtt_opts.get("qos", mqtt.qos)),
         retain=_as_bool(mqtt_opts.get("retain", mqtt.retain)),
+        max_inflight=int(mqtt_opts.get("max_inflight", mqtt.max_inflight)),
         client_id=str(mqtt_opts.get("client_id", mqtt.client_id)),
         ca_cert=_clean_cred(mqtt_opts.get("ca_cert", mqtt.ca_cert)),
         client_cert=_clean_cred(mqtt_opts.get("client_cert", mqtt.client_cert)),
@@ -196,6 +199,8 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         cfg = replace(cfg, max_backlog_rows=int(e["HEARTBEAT_MAX_BACKLOG_ROWS"]))
     if "HEARTBEAT_FLUSH_BATCH" in e:
         cfg = replace(cfg, flush_batch=int(e["HEARTBEAT_FLUSH_BATCH"]))
+    if "HEARTBEAT_FLUSH_INTERVAL" in e:
+        cfg = replace(cfg, flush_interval=float(e["HEARTBEAT_FLUSH_INTERVAL"]))
     if "HEARTBEAT_CONCURRENT_PINGS" in e:
         cfg = replace(cfg, concurrent_pings=_as_bool(e["HEARTBEAT_CONCURRENT_PINGS"]))
 
@@ -213,6 +218,8 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         mqtt = replace(mqtt, topic_prefix=e["HEARTBEAT_MQTT_TOPIC_PREFIX"])
     if "HEARTBEAT_MQTT_QOS" in e:
         mqtt = replace(mqtt, qos=int(e["HEARTBEAT_MQTT_QOS"]))
+    if "HEARTBEAT_MQTT_MAX_INFLIGHT" in e:
+        mqtt = replace(mqtt, max_inflight=int(e["HEARTBEAT_MQTT_MAX_INFLIGHT"]))
     if "HEARTBEAT_MQTT_RETAIN" in e:
         mqtt = replace(mqtt, retain=_as_bool(e["HEARTBEAT_MQTT_RETAIN"]))
     if "HEARTBEAT_MQTT_CLIENT_ID" in e:

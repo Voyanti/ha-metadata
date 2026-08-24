@@ -49,9 +49,9 @@ class MqttPublisher:
                 client.tls_insecure_set(True)
         client.reconnect_delay_set(min_delay=1, max_delay=60)
         # Allow many qos>0 messages in flight at once so a backlog flush
-        # pipelines instead of blocking on each PUBACK in turn. Capped at AWS
-        # IoT Core's per-connection in-flight limit (100).
-        client.max_inflight_messages_set(100)
+        # pipelines instead of blocking on each PUBACK in turn (default caps at
+        # AWS IoT Core's per-connection in-flight limit).
+        client.max_inflight_messages_set(cfg.max_inflight)
         # Surface paho's own connection diagnostics (socket errors, retries).
         client.enable_logger(logging.getLogger("heartbeat.mqtt"))
         return client
@@ -135,13 +135,11 @@ class MqttPublisher:
     def flush(self, outbox: Outbox, limit: int = 200) -> tuple[int, int]:
         """Publish pending rows newest-first. Every publish is issued first, so
         the messages go in flight concurrently on paho's network thread (bounded
-        by max_inflight_messages); then the PUBACKs are awaited in order and each
-        confirmed row is deleted. Stops at the first unconfirmed row so it and
-        the rest retry next tick. Returns ``(published, remaining_in_batch)``.
-
-        A row published just before an unconfirmed one may already have reached
-        the broker; keeping it queued can re-send it next tick. That is fine
-        under qos=1 (at-least-once) — consumers dedupe on observed_at."""
+        by max_inflight_messages); then each PUBACK is awaited independently.
+        Every confirmed row is deleted and every unconfirmed one is left queued
+        for retry — a delivered message is never republished just because an
+        earlier or later one in the batch failed. Returns
+        ``(published, remaining_in_batch)``."""
         rows = outbox.fetch_pending(limit)
         if not rows:
             return (0, 0)
@@ -152,26 +150,31 @@ class MqttPublisher:
             )
             return (0, len(rows))
 
-        # Phase 1: fire all publishes without blocking, stopping at the first
-        # the client refuses to send.
-        inflight = []  # (row, info) in fetch order
+        # Phase 1: fire all publishes without blocking. A row the client refuses
+        # to send stays queued (unconfirmed) and retries next cycle.
+        inflight = []  # (row, info) for accepted sends
+        unconfirmed_ids = []
         for row in rows:
             info = self._send(self._topic(row.target_type, row.target_name), row.payload_json)
             if info is None:
-                break
-            inflight.append((row, info))
+                unconfirmed_ids.append(row.id)
+            else:
+                inflight.append((row, info))
 
-        # Phase 2: await confirmations in order; stop at the first failure.
-        published = 0
+        # Phase 2: confirm each independently — no stop-at-first-failure.
+        confirmed_ids = []
         for row, info in inflight:
-            if not self._confirm(info, self._topic(row.target_type, row.target_name)):
-                break
-            outbox.delete([row.id])
-            published += 1
+            if self._confirm(info, self._topic(row.target_type, row.target_name)):
+                confirmed_ids.append(row.id)
+            else:
+                unconfirmed_ids.append(row.id)
 
-        if published < len(rows):
-            outbox.increment_attempts([rows[published].id])
+        if confirmed_ids:
+            outbox.delete(confirmed_ids)
+        if unconfirmed_ids:
+            outbox.increment_attempts(unconfirmed_ids)
 
+        published = len(confirmed_ids)
         remaining = len(rows) - published
         if published:
             _LOGGER.info(

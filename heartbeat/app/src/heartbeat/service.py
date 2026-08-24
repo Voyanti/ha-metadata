@@ -1,4 +1,8 @@
-"""The heartbeat loop: run checks -> persist every result -> flush to MQTT."""
+"""The heartbeat service: two independent loops. The writer runs checks and
+persists every result to the outbox on the heartbeat interval; the flusher
+drains the outbox to MQTT on its own interval. Decoupling them means a publish
+backlog never delays a check, and flushing is not rate-limited to one batch per
+heartbeat."""
 
 from __future__ import annotations
 
@@ -53,33 +57,48 @@ class HeartbeatService:
                 )
         return [check_public_dns_target(self.runner, self.cfg, t) for t in targets]
 
-    def tick(self) -> None:
+    def write_once(self) -> None:
+        """Run the checks and persist every result to the outbox. Does not
+        publish — the flusher drains the outbox independently."""
         results = self.run_checks()
         for result in results:
-            self.outbox.enqueue(result)  # persist BEFORE publishing
+            self.outbox.enqueue(result)
         failures = sum(1 for r in results if not r.success)
         _LOGGER.info(
             "Ran %d check(s); %d failed; queue=%d; mqtt_connected=%s",
             len(results), failures, self.outbox.count(), self.publisher.connected,
         )
-        self.publisher.flush(self.outbox, limit=self.cfg.flush_batch)
         self.outbox.trim_backlog(self.cfg.max_backlog_rows)
 
-    def run_forever(
+    def flush_once(self) -> tuple[int, int]:
+        """Publish one batch from the outbox. Does not run checks."""
+        return self.publisher.flush(self.outbox, limit=self.cfg.flush_batch)
+
+    def run_writer(
         self, stop: threading.Event, *, now: Callable[[], float] | None = None
     ) -> None:
-        # ``now`` is injectable so tests can drive the clock; production uses the
-        # monotonic clock.
+        """Loop ``write_once`` on the heartbeat interval. ``now`` is injectable
+        so tests can drive the clock; production uses the monotonic clock."""
         now = now or time.monotonic
-        _LOGGER.info("Heartbeat loop started; interval=%ss", self.cfg.heartbeat_interval)
+        _LOGGER.info("Check loop started; interval=%ss", self.cfg.heartbeat_interval)
         next_at = now()
         while not stop.is_set():
             try:
-                self.tick()
+                self.write_once()
             except Exception:  # noqa: BLE001 - one bad tick must not kill the loop
-                _LOGGER.exception("Heartbeat tick failed")
+                _LOGGER.exception("Check tick failed")
             # Fixed-cadence scheduling: the sleep shrinks by however long the
-            # tick took, so a slow flush never pushes back the next tick. A tick
+            # tick took, so a slow check never pushes back the next one. A tick
             # that overruns the interval makes the next one fire immediately.
             next_at += self.cfg.heartbeat_interval
             stop.wait(max(0.0, next_at - now()))
+
+    def run_flusher(self, stop: threading.Event) -> None:
+        """Loop ``flush_once``, sleeping ``flush_interval`` between cycles."""
+        _LOGGER.info("Flush loop started; interval=%ss", self.cfg.flush_interval)
+        while not stop.is_set():
+            try:
+                self.flush_once()
+            except Exception:  # noqa: BLE001 - one bad cycle must not kill the loop
+                _LOGGER.exception("Flush cycle failed")
+            stop.wait(self.cfg.flush_interval)

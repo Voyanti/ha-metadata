@@ -44,9 +44,20 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle)
     signal.signal(signal.SIGINT, _handle)
 
+    # The check writer and the MQTT flusher run independently: a publish backlog
+    # never delays a check, and flushing is not tied to the heartbeat interval.
+    writer = threading.Thread(target=service.run_writer, args=(stop,), name="writer")
+    flusher = threading.Thread(target=service.run_flusher, args=(stop,), name="flusher")
+    writer.start()
+    flusher.start()
+
     try:
-        service.run_forever(stop)
+        while not stop.wait(1.0):  # main thread parks here, wakes to run signal handlers
+            pass
     finally:
+        stop.set()
+        writer.join(timeout=10)
+        flusher.join(timeout=10)
         _LOGGER.info("Final flush before exit")
         try:
             publisher.flush(outbox, limit=cfg.flush_batch)

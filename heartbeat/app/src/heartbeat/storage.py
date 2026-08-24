@@ -5,14 +5,17 @@ Every check result is enqueued here first, then flushed to MQTT. Rows are
 the oldest rows if the broker stays unreachable long enough to exceed it, so a
 prolonged outage can never grow the database without bound.
 
-The connection is owned by the service loop thread; the paho network thread
-never touches SQLite.
+The check-writer thread enqueues while the flusher thread fetches and deletes,
+so every operation takes ``self._lock`` around its SQLite access. The paho
+network thread never touches SQLite. Broker round-trips happen in the publisher,
+outside the lock, so the two threads never block each other on the network.
 """
 
 from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -57,6 +60,7 @@ class Outbox:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        self._lock = threading.Lock()
 
     def init(self) -> None:
         if self.db_path != ":memory:":
@@ -84,27 +88,29 @@ class Outbox:
 
     def enqueue(self, result: CheckResult) -> int:
         rec = result.to_record()
-        cur = self.conn.execute(
-            """INSERT INTO outbox
-               (observed_at, check_kind, target_type, target_name, target_host,
-                success, rc, error, payload_json, created_at, attempts)
-               VALUES (:observed_at, :check_kind, :target_type, :target_name,
-                       :target_host, :success, :rc, :error, :payload_json,
-                       :created_at, 0)""",
-            {**rec, "created_at": _now()},
-        )
-        return int(cur.lastrowid)
+        with self._lock:
+            cur = self.conn.execute(
+                """INSERT INTO outbox
+                   (observed_at, check_kind, target_type, target_name, target_host,
+                    success, rc, error, payload_json, created_at, attempts)
+                   VALUES (:observed_at, :check_kind, :target_type, :target_name,
+                           :target_host, :success, :rc, :error, :payload_json,
+                           :created_at, 0)""",
+                {**rec, "created_at": _now()},
+            )
+            return int(cur.lastrowid)
 
     def fetch_pending(self, limit: int = 200) -> list[PendingRow]:
         """Return up to ``limit`` rows newest-first (LIFO). After an outage the
         most recent checks publish before the older backlog, so live status
         recovers first. Delivery order is not the source of truth: every payload
         carries ``observed_at``, so consumers order by real observation time."""
-        rows = self.conn.execute(
-            "SELECT id, payload_json, target_type, target_name "
-            "FROM outbox ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, payload_json, target_type, target_name "
+                "FROM outbox ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return [
             PendingRow(r["id"], r["payload_json"], r["target_type"], r["target_name"])
             for r in rows
@@ -114,34 +120,38 @@ class Outbox:
         if not ids:
             return
         placeholders = ",".join("?" for _ in ids)
-        self.conn.execute(f"DELETE FROM outbox WHERE id IN ({placeholders})", tuple(ids))
+        with self._lock:
+            self.conn.execute(f"DELETE FROM outbox WHERE id IN ({placeholders})", tuple(ids))
 
     def increment_attempts(self, ids: Sequence[int]) -> None:
         if not ids:
             return
         placeholders = ",".join("?" for _ in ids)
-        self.conn.execute(
-            f"UPDATE outbox SET attempts = attempts + 1 WHERE id IN ({placeholders})",
-            tuple(ids),
-        )
+        with self._lock:
+            self.conn.execute(
+                f"UPDATE outbox SET attempts = attempts + 1 WHERE id IN ({placeholders})",
+                tuple(ids),
+            )
 
     def count(self) -> int:
-        return int(self.conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0])
+        with self._lock:
+            return int(self.conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0])
 
     def trim_backlog(self, max_rows: int) -> int:
         """Drop the oldest rows beyond ``max_rows``. Returns the number dropped
         and logs loudly — truncation is never silent."""
         if max_rows <= 0:
             return 0
-        total = self.count()
-        if total <= max_rows:
-            return 0
-        to_drop = total - max_rows
-        self.conn.execute(
-            "DELETE FROM outbox WHERE id IN "
-            "(SELECT id FROM outbox ORDER BY id LIMIT ?)",
-            (to_drop,),
-        )
+        with self._lock:
+            total = int(self.conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0])
+            if total <= max_rows:
+                return 0
+            to_drop = total - max_rows
+            self.conn.execute(
+                "DELETE FROM outbox WHERE id IN "
+                "(SELECT id FROM outbox ORDER BY id LIMIT ?)",
+                (to_drop,),
+            )
         _LOGGER.warning(
             "Outbox backlog %d exceeded cap %d; dropped %d oldest row(s)",
             total, max_rows, to_drop,

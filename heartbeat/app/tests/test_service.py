@@ -32,12 +32,13 @@ def make_outbox() -> Outbox:
     return ob
 
 
-def test_tick_enqueues_then_flushes(runner_factory, fake_publisher_factory):
+def test_write_then_flush(runner_factory, fake_publisher_factory):
     r = _full_runner(runner_factory)
     ob = make_outbox()
     pub = fake_publisher_factory(connected=True)
     svc = HeartbeatService(_cfg(), r, ob, pub)
-    svc.tick()
+    svc.write_once()
+    svc.flush_once()
     # gateway + 1 public-dns ping + broker dns = 3 results, all published
     assert pub.published == 3
     assert ob.count() == 0
@@ -48,9 +49,10 @@ def test_results_persist_when_broker_down(runner_factory, fake_publisher_factory
     ob = make_outbox()
     pub = fake_publisher_factory(connected=False)
     svc = HeartbeatService(_cfg(), r, ob, pub)
-    svc.tick()
+    svc.write_once()
+    svc.flush_once()
     assert pub.published == 0
-    assert ob.count() == 3  # nothing lost; queued for next tick
+    assert ob.count() == 3  # nothing lost; queued for next cycle
 
 
 def test_check_gateway_disabled(runner_factory, fake_publisher_factory):
@@ -64,23 +66,23 @@ def test_check_gateway_disabled(runner_factory, fake_publisher_factory):
     assert not any(x.target["type"] == "gateway" for x in results)
 
 
-def test_run_forever_exits_on_stop(runner_factory, fake_publisher_factory):
+def test_run_writer_exits_on_stop(runner_factory, fake_publisher_factory):
     ob = make_outbox()
     pub = fake_publisher_factory(connected=True)
     svc = HeartbeatService(
         _cfg(heartbeat_interval=0.02), _full_runner(runner_factory), ob, pub
     )
     stop = threading.Event()
-    t = threading.Thread(target=svc.run_forever, args=(stop,))
+    t = threading.Thread(target=svc.run_writer, args=(stop,))
     t.start()
     time.sleep(0.1)
     stop.set()
     t.join(timeout=2)
     assert not t.is_alive()
-    assert pub.published > 0  # it ticked at least once
+    assert ob.count() > 0  # it wrote at least once
 
 
-def test_tick_exception_does_not_kill_loop(fake_publisher_factory):
+def test_writer_exception_does_not_kill_loop(fake_publisher_factory):
     class BoomRunner:
         def run(self, *a, **k):
             raise RuntimeError("boom")
@@ -89,7 +91,7 @@ def test_tick_exception_does_not_kill_loop(fake_publisher_factory):
     pub = fake_publisher_factory(connected=True)
     svc = HeartbeatService(_cfg(heartbeat_interval=0.02), BoomRunner(), ob, pub)
     stop = threading.Event()
-    t = threading.Thread(target=svc.run_forever, args=(stop,))
+    t = threading.Thread(target=svc.run_writer, args=(stop,))
     t.start()
     time.sleep(0.1)
     stop.set()
