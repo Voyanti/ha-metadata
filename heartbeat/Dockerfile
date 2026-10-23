@@ -1,9 +1,9 @@
 # https://developers.home-assistant.io/docs/apps/configuration#app-dockerfile
-ARG BUILD_FROM=ghcr.io/home-assistant/base:3.23
+ARG BUILD_FROM=ghcr.io/home-assistant/base:3.24
 FROM ${BUILD_FROM}
 
 # uv: copy the static binaries in (reproducible, arch-correct under BuildKit).
-COPY --from=ghcr.io/astral-sh/uv:0.11.7 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /usr/local/bin/
 
 # Runtime tools for the heartbeat checks:
 #   iproute2   -> `ip route show default`        (gateway discovery)

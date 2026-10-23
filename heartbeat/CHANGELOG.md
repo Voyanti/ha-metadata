@@ -1,3 +1,8 @@
+## 1.4.1
+
+- Bump the base image to Alpine 3.24 and uv to 0.13.5.
+- Refresh locked dev dependencies (pytest 9.1.1).
+
 ## 1.3.0
 
 - Topics are now `[<topic_prefix>/]heartbeat/<type>/<name>`. `topic_prefix` is an
