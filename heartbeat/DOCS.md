@@ -38,8 +38,9 @@ acknowledged, rows stay queued and are retried on later flush cycles
 (store-and-forward; a row can arrive twice after a reconnect, never zero times).
 The outbox is flushed every 15 seconds, newest rows first, at most 200 rows per
 cycle and **at most 50 publishes per second**, so a backlog after an outage stays
-well under AWS IoT Core's limit of 100 publishes per second per connection. A backlog cap (`max_backlog_rows`, default 100000) drops the
-oldest rows during a very long outage so the database cannot grow without bound.
+well under AWS IoT Core's limit of 100 publishes per second per connection.
+A backlog cap (`max_backlog_rows`, default 100000) drops the oldest rows during a
+very long outage so the database cannot grow without bound.
 
 ## Configuration
 
