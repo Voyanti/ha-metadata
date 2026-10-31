@@ -22,4 +22,8 @@ configuration:
     description: Verbosity of the add-on log output.
   mqtt:
     name: MQTT broker
-    description: Where heartbeat results are published.
+    description: >-
+      Where heartbeat results are published. For AWS IoT Core where outbound
+      port 8883 is blocked, use port 443 with alpn set to x-amzn-mqtt-ca and
+      the device certificate, key and CA from /ssl. Leave alpn empty for
+      port 8883 or a plain broker.

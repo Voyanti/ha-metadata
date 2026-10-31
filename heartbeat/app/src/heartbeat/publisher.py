@@ -3,13 +3,18 @@
 Connection is asynchronous and runs in paho's background network thread, so the
 service loop never blocks on it. When the broker is unreachable, ``flush()``
 publishes nothing and the rows stay queued in the outbox; paho auto-reconnects
-and the backlog drains (newest first) once it is back.
+and the backlog drains (newest first) once it is back, paced to
+``max_publish_rate`` so a large backlog never bursts past the broker's limit.
 """
 
 from __future__ import annotations
 
 import logging
+import math
+import ssl
 import threading
+import time
+from collections.abc import Callable
 
 import paho.mqtt.client as mqtt
 
@@ -19,11 +24,45 @@ from .storage import Outbox
 _LOGGER = logging.getLogger(__name__)
 
 
+class _Pacer:
+    """Spaces successive calls to ``wait()`` at least ``1/rate`` seconds apart,
+    so no one-second window ever holds more than ``rate`` calls. Time is kept in
+    integer nanoseconds so that bound is exact rather than subject to float drift."""
+
+    def __init__(
+        self,
+        rate: float,
+        *,
+        clock: Callable[[], int] = time.monotonic_ns,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._gap_ns = math.ceil(1e9 / rate)
+        self._clock = clock
+        self._sleep = sleep
+        self._next_ns: int | None = None
+
+    def wait(self) -> None:
+        now = self._clock()
+        if self._next_ns is not None:
+            while now < self._next_ns:
+                self._sleep((self._next_ns - now) / 1e9)
+                now = self._clock()
+        self._next_ns = now + self._gap_ns
+
+
 class MqttPublisher:
-    def __init__(self, cfg: MqttConfig, client: mqtt.Client | None = None) -> None:
-        # ``client`` is injectable so tests can substitute a fake MQTT client and
-        # exercise the real flush logic; production builds the paho client.
+    def __init__(
+        self,
+        cfg: MqttConfig,
+        client: mqtt.Client | None = None,
+        *,
+        pacer: _Pacer | None = None,
+    ) -> None:
+        # ``client`` and ``pacer`` are injectable so tests can substitute a fake
+        # MQTT client and a virtual clock and exercise the real flush logic;
+        # production builds the paho client and paces on the monotonic clock.
         self.cfg = cfg
+        self._pacer = pacer if pacer is not None else _Pacer(cfg.max_publish_rate)
         self._connected = threading.Event()
         self._client = client if client is not None else self._build_client(cfg)
         self._client.on_connect = self._on_connect
@@ -39,7 +78,11 @@ class MqttPublisher:
         # Enable TLS when explicitly requested, or implicitly when any cert is
         # provided (mutual TLS, e.g. AWS IoT Core). ca_cert/client_cert/
         # client_key default to the system CA bundle / no client cert when None.
-        if cfg.tls or cfg.ca_cert or cfg.client_cert:
+        # ALPN (AWS IoT Core on port 443) needs a hand-built SSLContext, which
+        # tls_set() cannot provide.
+        if cfg.alpn:
+            client.tls_set_context(_alpn_context(cfg))
+        elif cfg.tls or cfg.ca_cert or cfg.client_cert:
             client.tls_set(
                 ca_certs=cfg.ca_cert,
                 certfile=cfg.client_cert,
@@ -47,6 +90,7 @@ class MqttPublisher:
             )
             if cfg.tls_insecure:
                 client.tls_insecure_set(True)
+        _LOGGER.info("MQTT TLS: %s", _describe_tls(cfg))
         client.reconnect_delay_set(min_delay=1, max_delay=60)
         # Allow many qos>0 messages in flight at once so a backlog flush
         # pipelines instead of blocking on each PUBACK in turn (default caps at
@@ -133,9 +177,10 @@ class MqttPublisher:
         return info is not None and self._confirm(info, topic)
 
     def flush(self, outbox: Outbox, limit: int = 200) -> tuple[int, int]:
-        """Publish pending rows newest-first. Every publish is issued first, so
-        the messages go in flight concurrently on paho's network thread (bounded
-        by max_inflight_messages); then each PUBACK is awaited independently.
+        """Publish pending rows newest-first. Every publish is issued first, at
+        most ``max_publish_rate`` per second, so the messages go in flight
+        concurrently on paho's network thread (bounded by
+        max_inflight_messages); then each PUBACK is awaited independently.
         Every confirmed row is deleted and every unconfirmed one is left queued
         for retry — a delivered message is never republished just because an
         earlier or later one in the batch failed. Returns
@@ -150,11 +195,18 @@ class MqttPublisher:
             )
             return (0, len(rows))
 
-        # Phase 1: fire all publishes without blocking. A row the client refuses
-        # to send stays queued (unconfirmed) and retries next cycle.
+        # Phase 1: issue the publishes without waiting for PUBACKs, paced to
+        # max_publish_rate (AWS IoT Core drops a connection that exceeds its
+        # per-connection limit). A row the client refuses to send stays queued
+        # (unconfirmed) and retries next cycle. If the broker drops mid-batch,
+        # stop sending: the unsent rows stay queued for the next cycle.
         inflight = []  # (row, info) for accepted sends
         unconfirmed_ids = []
-        for row in rows:
+        for i, row in enumerate(rows):
+            self._pacer.wait()
+            if not self.connected:
+                unconfirmed_ids.extend(r.id for r in rows[i:])
+                break
             info = self._send(self._topic(row.target_type, row.target_name), row.payload_json)
             if info is None:
                 unconfirmed_ids.append(row.id)
@@ -194,3 +246,32 @@ class MqttPublisher:
             self._client.disconnect()
         except Exception:  # noqa: BLE001 - best-effort cleanup
             pass
+
+
+def _alpn_context(cfg: MqttConfig) -> ssl.SSLContext:
+    """TLS context for brokers that select the protocol by ALPN, e.g. AWS IoT
+    Core on port 443 (``x-amzn-mqtt-ca``), which also requires a client
+    certificate. Unset ca_cert means the system CA bundle, as with tls_set()."""
+    ctx = ssl.create_default_context(cafile=cfg.ca_cert)
+    if cfg.client_cert:
+        ctx.load_cert_chain(cfg.client_cert, cfg.client_key)
+    ctx.set_alpn_protocols([cfg.alpn])
+    if cfg.tls_insecure:
+        # Same meaning as tls_insecure_set(True) on the tls_set() path: skip
+        # the hostname check, still verify the certificate chain.
+        ctx.check_hostname = False
+    return ctx
+
+
+def _describe_tls(cfg: MqttConfig) -> str:
+    """One-line TLS mode for the log. Names settings only, never key material."""
+    if not (cfg.alpn or cfg.tls or cfg.ca_cert or cfg.client_cert):
+        return "off"
+    parts = ["on"]
+    if cfg.alpn:
+        parts.append(f"ALPN {cfg.alpn!r}")
+    parts.append("client certificate " + ("set" if cfg.client_cert else "not set"))
+    parts.append("CA " + ("from ca_cert" if cfg.ca_cert else "system bundle"))
+    if cfg.tls_insecure:
+        parts.append("hostname check DISABLED (tls_insecure)")
+    return ", ".join(parts)

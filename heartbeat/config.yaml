@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/apps/configuration#app-configuration
 name: Heartbeat
-version: "1.4.1"
+version: "1.5.0"
 slug: heartbeat
 description: Network heartbeat checker (gateway/DNS/MQTT) with SQLite store-and-forward
 url: "https://github.com/Voyanti/ha-metadata/tree/main/heartbeat"
@@ -36,6 +36,7 @@ options:
     client_cert: ""
     client_key: ""
     tls_insecure: false
+    alpn: ""                # e.g. x-amzn-mqtt-ca for AWS IoT Core on port 443
 schema:
   heartbeat_interval: int(5,)
   check_gateway: bool
@@ -56,3 +57,4 @@ schema:
     client_cert: str?
     client_key: str?
     tls_insecure: bool
+    alpn: str?

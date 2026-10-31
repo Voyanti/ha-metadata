@@ -11,6 +11,10 @@ an MQTT broker. If the broker (or network) is down, results stay queued and are
 published once connectivity returns — so a heartbeat is never lost during the
 outage it is meant to detect.
 
+It supports mutual-TLS brokers such as AWS IoT Core, on port 8883 or, where
+that port is blocked, on port 443 with the `alpn` option (`x-amzn-mqtt-ca`).
+Backlog flushes are paced to 50 publishes per second.
+
 The application core is Home-Assistant-agnostic, so the same image also runs as
 a plain Docker container on any Linux host (see [DOCS.md](./DOCS.md)).
 

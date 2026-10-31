@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -22,6 +23,9 @@ from dataclasses import dataclass, field, replace
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_OPTIONS_FILE = "/data/options.json"
+
+# AWS IoT Core accepts at most 100 publishes/s per connection.
+MAX_PUBLISH_RATE_CEILING = 100.0
 
 
 @dataclass(frozen=True)
@@ -41,12 +45,16 @@ class MqttConfig:
     qos: int = 1
     retain: bool = False
     max_inflight: int = 100  # IoT Core per-connection in-flight limit
+    # Publishes per second; IoT Core caps a connection at 100/s, so keep headroom.
+    max_publish_rate: float = 50.0
     client_id: str = ""  # empty -> no topic namespace + broker auto-generates the connection id
     # Mutual TLS (e.g. AWS IoT Core): paths to PEM files.
     ca_cert: str | None = None
     client_cert: str | None = None
     client_key: str | None = None
     tls_insecure: bool = False
+    # TLS ALPN protocol, e.g. "x-amzn-mqtt-ca" for AWS IoT Core on port 443.
+    alpn: str | None = None
 
 
 @dataclass(frozen=True)
@@ -168,11 +176,13 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         qos=int(mqtt_opts.get("qos", mqtt.qos)),
         retain=_as_bool(mqtt_opts.get("retain", mqtt.retain)),
         max_inflight=int(mqtt_opts.get("max_inflight", mqtt.max_inflight)),
+        max_publish_rate=float(mqtt_opts.get("max_publish_rate", mqtt.max_publish_rate)),
         client_id=str(mqtt_opts.get("client_id", mqtt.client_id)),
         ca_cert=_clean_cred(mqtt_opts.get("ca_cert", mqtt.ca_cert)),
         client_cert=_clean_cred(mqtt_opts.get("client_cert", mqtt.client_cert)),
         client_key=_clean_cred(mqtt_opts.get("client_key", mqtt.client_key)),
         tls_insecure=_as_bool(mqtt_opts.get("tls_insecure", mqtt.tls_insecure)),
+        alpn=_clean_cred(mqtt_opts.get("alpn", mqtt.alpn)),
     )
 
     # 2) environment variable overrides ------------------------------------- #
@@ -220,6 +230,8 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         mqtt = replace(mqtt, qos=int(e["HEARTBEAT_MQTT_QOS"]))
     if "HEARTBEAT_MQTT_MAX_INFLIGHT" in e:
         mqtt = replace(mqtt, max_inflight=int(e["HEARTBEAT_MQTT_MAX_INFLIGHT"]))
+    if "HEARTBEAT_MQTT_MAX_PUBLISH_RATE" in e:
+        mqtt = replace(mqtt, max_publish_rate=float(e["HEARTBEAT_MQTT_MAX_PUBLISH_RATE"]))
     if "HEARTBEAT_MQTT_RETAIN" in e:
         mqtt = replace(mqtt, retain=_as_bool(e["HEARTBEAT_MQTT_RETAIN"]))
     if "HEARTBEAT_MQTT_CLIENT_ID" in e:
@@ -232,5 +244,26 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         mqtt = replace(mqtt, client_key=_clean_cred(e["HEARTBEAT_MQTT_CLIENT_KEY"]))
     if "HEARTBEAT_MQTT_TLS_INSECURE" in e:
         mqtt = replace(mqtt, tls_insecure=_as_bool(e["HEARTBEAT_MQTT_TLS_INSECURE"]))
+    if "HEARTBEAT_MQTT_ALPN" in e:
+        mqtt = replace(mqtt, alpn=_clean_cred(e["HEARTBEAT_MQTT_ALPN"]))
 
+    mqtt = replace(mqtt, max_publish_rate=_checked_publish_rate(mqtt.max_publish_rate))
     return replace(cfg, mqtt=mqtt)
+
+
+def _checked_publish_rate(rate: float) -> float:
+    """Keep the flush pace inside what AWS IoT Core accepts per connection."""
+    if not math.isfinite(rate) or rate <= 0:
+        _LOGGER.warning(
+            "mqtt max_publish_rate=%s is not a positive number; using %s/s",
+            rate, MqttConfig.max_publish_rate,
+        )
+        return MqttConfig.max_publish_rate
+    if rate > MAX_PUBLISH_RATE_CEILING:
+        _LOGGER.warning(
+            "mqtt max_publish_rate=%s/s exceeds the AWS IoT Core limit of %s/s per "
+            "connection; clamping to %s/s",
+            rate, MAX_PUBLISH_RATE_CEILING, MAX_PUBLISH_RATE_CEILING,
+        )
+        return MAX_PUBLISH_RATE_CEILING
+    return rate
