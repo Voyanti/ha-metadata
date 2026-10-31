@@ -47,6 +47,8 @@ class MqttConfig:
     client_cert: str | None = None
     client_key: str | None = None
     tls_insecure: bool = False
+    # TLS ALPN protocol, e.g. "x-amzn-mqtt-ca" for AWS IoT Core on port 443.
+    alpn: str | None = None
 
 
 @dataclass(frozen=True)
@@ -173,6 +175,7 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         client_cert=_clean_cred(mqtt_opts.get("client_cert", mqtt.client_cert)),
         client_key=_clean_cred(mqtt_opts.get("client_key", mqtt.client_key)),
         tls_insecure=_as_bool(mqtt_opts.get("tls_insecure", mqtt.tls_insecure)),
+        alpn=_clean_cred(mqtt_opts.get("alpn", mqtt.alpn)),
     )
 
     # 2) environment variable overrides ------------------------------------- #
@@ -232,5 +235,8 @@ def load_config(environ: Mapping[str, str] | None = None) -> Config:
         mqtt = replace(mqtt, client_key=_clean_cred(e["HEARTBEAT_MQTT_CLIENT_KEY"]))
     if "HEARTBEAT_MQTT_TLS_INSECURE" in e:
         mqtt = replace(mqtt, tls_insecure=_as_bool(e["HEARTBEAT_MQTT_TLS_INSECURE"]))
+    if "HEARTBEAT_MQTT_ALPN" in e:
+        mqtt = replace(mqtt, alpn=_clean_cred(e["HEARTBEAT_MQTT_ALPN"]))
 
     return replace(cfg, mqtt=mqtt)
+

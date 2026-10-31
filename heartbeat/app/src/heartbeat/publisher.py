@@ -9,6 +9,7 @@ and the backlog drains (newest first) once it is back.
 from __future__ import annotations
 
 import logging
+import ssl
 import threading
 
 import paho.mqtt.client as mqtt
@@ -39,7 +40,11 @@ class MqttPublisher:
         # Enable TLS when explicitly requested, or implicitly when any cert is
         # provided (mutual TLS, e.g. AWS IoT Core). ca_cert/client_cert/
         # client_key default to the system CA bundle / no client cert when None.
-        if cfg.tls or cfg.ca_cert or cfg.client_cert:
+        # ALPN (AWS IoT Core on port 443) needs a hand-built SSLContext, which
+        # tls_set() cannot provide.
+        if cfg.alpn:
+            client.tls_set_context(_alpn_context(cfg))
+        elif cfg.tls or cfg.ca_cert or cfg.client_cert:
             client.tls_set(
                 ca_certs=cfg.ca_cert,
                 certfile=cfg.client_cert,
@@ -47,6 +52,7 @@ class MqttPublisher:
             )
             if cfg.tls_insecure:
                 client.tls_insecure_set(True)
+        _LOGGER.info("MQTT TLS: %s", _describe_tls(cfg))
         client.reconnect_delay_set(min_delay=1, max_delay=60)
         # Allow many qos>0 messages in flight at once so a backlog flush
         # pipelines instead of blocking on each PUBACK in turn (default caps at
@@ -194,3 +200,32 @@ class MqttPublisher:
             self._client.disconnect()
         except Exception:  # noqa: BLE001 - best-effort cleanup
             pass
+
+
+def _alpn_context(cfg: MqttConfig) -> ssl.SSLContext:
+    """TLS context for brokers that select the protocol by ALPN, e.g. AWS IoT
+    Core on port 443 (``x-amzn-mqtt-ca``), which also requires a client
+    certificate. Unset ca_cert means the system CA bundle, as with tls_set()."""
+    ctx = ssl.create_default_context(cafile=cfg.ca_cert)
+    if cfg.client_cert:
+        ctx.load_cert_chain(cfg.client_cert, cfg.client_key)
+    ctx.set_alpn_protocols([cfg.alpn])
+    if cfg.tls_insecure:
+        # Same meaning as tls_insecure_set(True) on the tls_set() path: skip
+        # the hostname check, still verify the certificate chain.
+        ctx.check_hostname = False
+    return ctx
+
+
+def _describe_tls(cfg: MqttConfig) -> str:
+    """One-line TLS mode for the log. Names settings only, never key material."""
+    if not (cfg.alpn or cfg.tls or cfg.ca_cert or cfg.client_cert):
+        return "off"
+    parts = ["on"]
+    if cfg.alpn:
+        parts.append(f"ALPN {cfg.alpn!r}")
+    parts.append("client certificate " + ("set" if cfg.client_cert else "not set"))
+    parts.append("CA " + ("from ca_cert" if cfg.ca_cert else "system bundle"))
+    if cfg.tls_insecure:
+        parts.append("hostname check DISABLED (tls_insecure)")
+    return ", ".join(parts)

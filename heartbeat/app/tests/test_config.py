@@ -147,3 +147,31 @@ def test_effective_broker_dns_target():
     assert cfg.effective_broker_dns_target == "mybroker"
     cfg = load_config(environ={**NO_FILE, "HEARTBEAT_MQTT_HOST": "mybroker", "HEARTBEAT_BROKER_DNS_TARGET": "other"})
     assert cfg.effective_broker_dns_target == "other"
+
+
+def test_mqtt_alpn_default_none():
+    assert load_config(environ=NO_FILE).mqtt.alpn is None
+
+
+def test_mqtt_alpn_from_options(tmp_path):
+    f = tmp_path / "options.json"
+    f.write_text(json.dumps({"mqtt": {"port": 443, "alpn": "x-amzn-mqtt-ca"}}))
+    cfg = load_config(environ={"HEARTBEAT_OPTIONS_FILE": str(f)})
+    assert cfg.mqtt.alpn == "x-amzn-mqtt-ca"
+    assert cfg.mqtt.port == 443
+
+
+def test_mqtt_alpn_empty_option_is_none(tmp_path):
+    f = tmp_path / "options.json"
+    f.write_text(json.dumps({"mqtt": {"alpn": ""}}))
+    assert load_config(environ={"HEARTBEAT_OPTIONS_FILE": str(f)}).mqtt.alpn is None
+
+
+def test_mqtt_alpn_env_override(tmp_path):
+    f = tmp_path / "options.json"
+    f.write_text(json.dumps({"mqtt": {"alpn": "from-file"}}))
+    env = {"HEARTBEAT_OPTIONS_FILE": str(f), "HEARTBEAT_MQTT_ALPN": "x-amzn-mqtt-ca"}
+    assert load_config(environ=env).mqtt.alpn == "x-amzn-mqtt-ca"
+    env["HEARTBEAT_MQTT_ALPN"] = ""  # an empty override switches ALPN off
+    assert load_config(environ=env).mqtt.alpn is None
+
