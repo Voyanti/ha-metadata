@@ -1,3 +1,15 @@
+## 1.5.0
+
+- Add `mqtt.alpn` option (env `HEARTBEAT_MQTT_ALPN`). Set it to `x-amzn-mqtt-ca`
+  with port 443 to reach AWS IoT Core where outbound 8883 is blocked. Empty
+  (default) leaves the TLS setup exactly as before.
+- Pace backlog flushes to at most 50 publishes per second (new
+  `HEARTBEAT_MQTT_MAX_PUBLISH_RATE`, default 50, clamped to AWS IoT Core's
+  100/s), so draining a backlog after an outage no longer bursts up to 200
+  publishes at once. Rows are still deleted only after their PUBACK; a flush
+  stops sending when the connection drops and the rest stay queued.
+- Log the TLS mode in use at startup (no key material or passwords).
+
 ## 1.4.1
 
 - Bump the base image to Alpine 3.24 and uv to 0.13.5.
